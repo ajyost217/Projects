@@ -1,0 +1,109 @@
+# Andrew Yost
+# 2022 Feb. 8
+#
+# MINEing basketball data
+
+library(tidyverse)
+library(minerva)
+library(ggrepel)
+library(MASS)
+library(progress)
+
+##writeLines(capture.output(sessionInfo()), "./r_session_info_m1.txt")
+
+# function for estimating the density in 2d cartesian space
+get_density <- function(x, y, ...) {
+    dens <- MASS::kde2d(x, y, ...)
+    ix <- findInterval(x, dens$x)
+    iy <- findInterval(y, dens$y)
+    ii <- cbind(ix, iy)
+    return(dens$z[ii])
+}
+
+################################################################################
+
+# read in the data
+df <- "./data/players_stats.csv" %>% 
+    read_csv() %>%
+    as.data.frame()
+
+# define all possible pairwise combinations
+allp <- combn(c('Age', 'MIN', 'PTS', 'FGM', 'FGA', '3PM', '3PA', 'FTM', 'EFF',
+                'FTA', 'REB', 'AST', 'STL', 'BLK', 'TOV', 'PF', 'FG%', '3P%'),2)
+
+# create a progress bar so we can go get coffee
+pb <- progress_bar$new(total = df$Age %>% unique() %>% length() * dim(allp)[2],
+                       format = "  MINEing [:bar] :percent eta: :eta")
+
+# create a list to store results
+l_out <- list()
+ii <- 0
+
+# iterate over all years
+for( yid in df$Age %>% unique() ){
+    
+    df_this <- df 
+        ##filter(Age == yid)
+    
+    # iterate over all pairwise combinations
+    for( i in 1:dim(allp)[2] ){
+        
+        pb$tick()
+        
+        # define the reference pairs
+        x <- allp[,i][1]
+        y <- allp[,i][2]
+        
+        ##if(is.na(df_this[,x]) || is.na(df_this[,y]))
+            ##next()
+        
+        ii <- ii + 1
+        # compute the mine stats and store
+        l_out[[ii]] <- mine(df_this[,x], df_this[,y], use = 'pairwise.complete.obs')
+        
+        # compute the pearson correlation 
+        l_out[[ii]]$PEARSON <- cor(df_this[,x], df_this[,y])
+        
+        # store the reference variables
+        l_out[[ii]]$age <- yid
+        l_out[[ii]]$x <- x
+        l_out[[ii]]$y <- y
+        
+    }
+}
+
+# convert the list back to a tibble
+df_mine <- l_out %>% 
+    bind_rows() %>%
+    filter(!is.na(PEARSON)) %>%
+    mutate(density = get_density(MIC, PEARSON, n = 100))
+
+# subset by interesting non-linear correlations
+df_see <- df_mine %>% 
+    filter(abs(`MIC-R2`) > .2 & MIC > .5)
+
+# plot the MINEd data
+df_mine %>%
+    ggplot(aes(MIC, PEARSON)) +
+    geom_point(aes(color=density)) +
+    geom_label_repel(data = df_see,
+              aes(label = paste0(x,'~',y,' ',age)), 
+              size=3, box.padding = 1, color='red') +
+    scale_x_continuous(breaks=-10:10/10) +
+    scale_y_continuous(breaks=-10:10/10) +
+    scale_color_viridis_c() +
+    theme_minimal() +
+    ggtitle("MINEing Basketball Stats",
+            paste(range(df_mine$year)[1], "to", range(df_mine$year)[2]))
+
+ggsave("./plot_basketball-mined.png", w=10, h=8)
+
+# something interesting I see
+df %>%
+    filter(Height <= 200) %>%
+    ggplot() +
+    geom_point(aes(`3P%`, REB)) +
+    theme_minimal() +
+    ggtitle("3P% ~ REB")
+
+ggsave("./plot_basketball_3P_REB.png", w=6, h=4)
